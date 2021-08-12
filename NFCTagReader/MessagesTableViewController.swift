@@ -1,5 +1,5 @@
 /*
-See LICENSE folder for this sample’s licensing information.
+See LICENSE folder for this sample's licensing information.
 
 Abstract:
 The view controller that scans and displays NDEF messages.
@@ -11,7 +11,12 @@ import CoreNFC
 /// - Tag: MessagesTableViewController
 class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDelegate {
 
+    let challenge: [UInt8] = [0x00, 0x84, 0x00, 0x00, 0x08]
+    let secureRead: [UInt8] = [0x90, 0x32, 0x03, 0x00, 0x0A, 0x12, 0x01]
+    let secureReadLength: UInt8 = 0x00
 
+    var readerRandom: [UInt8] = []
+    var cardRandom: [UInt8] = []
 
     // MARK: - Properties
 
@@ -58,10 +63,10 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
     func tagReaderSession(_ session: NFCTagReaderSession, didInvalidateWithError error: Error) {
     }
 
-    func generateRandomBytes() -> Data? {
-        var keyData = Data(count: 8)
+    func getRandomBytes(count: Int = 8) -> Data? {
+        var keyData = Data(count: count)
         let result = keyData.withUnsafeMutableBytes {
-            SecRandomCopyBytes(kSecRandomDefault, 8, $0.baseAddress!)
+            SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!)
         }
 
         if result == errSecSuccess {
@@ -69,6 +74,104 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
         } else {
             return nil
         }
+    }
+
+    func challenge(session: NFCTagReaderSession, tag: NFCISO7816Tag, completion: @escaping (() -> Void)) {
+        guard let challengeAPDU = NFCISO7816APDU(data: Data(self.challenge)) else {
+            session.invalidate(errorMessage: "Unable to challenge")
+            return
+        }
+
+        tag.sendCommand(apdu: challengeAPDU) { data, sw1, sw2, error in
+            guard error == nil, sw1 == 144, sw2 == 0 else {
+                session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
+                return
+            }
+
+            self.cardRandom = [UInt8](data)
+            completion()
+        }
+    }
+
+    func secureRead(session: NFCTagReaderSession, tag: NFCISO7816Tag, completion: @escaping ((_ secureReadPurse: [UInt8]) -> Void)) {
+        var secureReadPurse: [UInt8] = self.secureRead
+        secureReadPurse.append(contentsOf: self.readerRandom)
+        secureReadPurse.append(self.secureReadLength)
+
+        guard let secureAPDU = NFCISO7816APDU.init(data: Data(secureReadPurse)) else {
+            session.invalidate(errorMessage: "Unable to read balance")
+            return
+        }
+
+        tag.sendCommand(apdu: secureAPDU) { data, sw1, sw2, error in
+            guard error == nil, sw1 == 144, sw2 == 0 else {
+                session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
+                return
+            }
+
+            let balanceHex = data.subdata(in: 3..<5).hexString()
+            let balance = UInt32(balanceHex, radix: 16) ?? 0
+
+            debugPrint("Saldo: \(balance)")
+            completion(secureReadPurse)
+        }
+    }
+
+    func writeRequest(session: NFCTagReaderSession, tag: NFCISO7816Tag, secureReadPurse: [UInt8]) {
+        var request = secureReadPurse[0..<5]
+        request.append(contentsOf: [0x18, 0x01])
+        request.append(contentsOf: self.readerRandom)
+
+        debugPrint("Write Request: \(request)")
+
+        guard let writeRequestAPDU = NFCISO7816APDU(data: Data(request)) else {
+            session.invalidate(errorMessage: "Unable to connect to tag")
+            return
+        }
+
+        tag.sendCommand(apdu: writeRequestAPDU) { data, sw1, sw2, error in
+            guard error == nil, sw1 == 144, sw2 == 0 else {
+                session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
+                return
+            }
+
+            let cardNumber = data.subdata(in: 8..<16)
+            debugPrint("Card number: \(cardNumber.hexString())")
+
+            let cardBalance = data.subdata(in: 2..<5)
+            let balance = UInt32(cardBalance.hexString(), radix: 16) ?? 0
+            debugPrint("Card balance: \(balance)")
+
+            let maxBalanceLimit = data.subdata(in: 78..<81)
+            let maxBalance = UInt32(maxBalanceLimit.hexString(), radix: 16) ?? 0
+            debugPrint("Max Balance Limit: \(maxBalance)")
+
+            let random = self.readerRandom
+            let card = self.cardRandom
+
+            let cardData: [UInt8] = [
+                0x00, 0x00,
+                data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
+                data[16], data[17], data[18], data[19], data[20], data[21], data[22], data[23],
+                random[0], random[1], random[2], random[3], random[4], random[5], random[6], random[7],
+                card[0], card[1], card[2], card[3], card[4], card[5], card[6], card[7],
+                0x00, 0x00, 0x00, 0x00,
+                data[1],
+                data[2], data[3], data[4],
+                data[28], data[29], data[30], data[31],
+                data[32], data[33], data[34], data[35], data[36], data[37], data[38], data[39],
+                data[42], data[43], data[44], data[45],
+                data[46], data[47], data[48], data[49], data[50], data[51], data[52], data[53],
+                data[54], data[55], data[56], data[57], data[58], data[59], data[60], data[61],
+                data[63],
+                data[94],
+                data[95], data[96], data[97], data[98], data[99], data[100], data[101], data[102],
+                data[103], data[104], data[105], data[106], data[107], data[108], data[109], data[110]
+            ]
+
+            debugPrint(cardData)
+        }
+
     }
 
     func tagReaderSession(_ session: NFCTagReaderSession, didDetect tags: [NFCTag]) {
@@ -87,74 +190,23 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
                 return
             }
 
-            if case .iso7816(let nfcTag) = tag {
-                if #available(iOS 14.0, *) {
-
-                    //Get Challenge
-                    //Data Response: 8 bytes random number
-                    //SW1/SW2: 90/00
-//                    let getChallenge = NFCISO7816APDU(data: Data([
-//                        0x00,
-//                        0x84,
-//                        0x00,
-//                        0x00,
-//                        0x08,
-//                    ]))
-
-                    guard /*let getChallengeApdu = getChallenge, */let trn = self.generateRandomBytes() else {
-                        session.invalidate(errorMessage: "Unable to connect to tag")
-                        return
-                    }
-//                    nfcTag.sendCommand(apdu: getChallengeApdu) { data, sw1, sw2, error in
-//                        if error != nil {
-//                            session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
-//                            return
-//                        }
-//                        debugPrint("Data from nfcTag: \(data), sw1/sw2: \(sw1)/\(sw2)")
-//                        session.invalidate()
-//                    }
-
-
-                    let secureRead = NFCISO7816APDU.init(data: Data([
-                        0x90,
-                        0x32,
-                        0x03,
-                        0x00,
-                        0x0A, 0x12, 0x01,
-                                    trn[0],
-                                    trn[1],
-                                    trn[2],
-                                    trn[3],
-                                    trn[4],
-                                    trn[5],
-                                    trn[6],
-                                    trn[7], 0x00]))
-
-                    guard let secureApdu = secureRead else {
-                        session.invalidate(errorMessage: "Unable to connect to tag")
-                        return
-                    }
-
-                    nfcTag.sendCommand(apdu: secureApdu) { data, sw1, sw2, error in
-                        if error != nil {
-                            session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
-                            return
-                        }
-
-                        let dataKartuHexString = self.hexStrToByte(in: data.hexEncodedString())
-                        let purseBalance = self.byteToHextString(in: dataKartuHexString, start: 3, end: 5).joined()
-                        let saldo = UInt32(purseBalance, radix: 16) ?? 0
-
-                        debugPrint("Saldo: \(saldo)")
-                        debugPrint("Data from nfcTag: \(data), sw1/sw2: \(sw1)/\(sw2)")
-                        session.invalidate()
-                    }
-
-                } else {
-                    // Fallback on earlier versions
-                    session.invalidate(errorMessage: "OS Not Supported")
+            if case let .iso7816(nfcTag) = tag {
+                guard let random = self.getRandomBytes() else {
+                    session.invalidate(errorMessage: "Unable to challenge")
+                    return
                 }
 
+                self.readerRandom = [UInt8](random)
+
+                self.challenge(session: session, tag: nfcTag) {
+                    self.secureRead(session: session, tag: nfcTag) {
+                        self.writeRequest(session: session, tag: nfcTag, secureReadPurse: $0)
+                    }
+                }
+
+            } else {
+                // Fallback on earlier versions
+                session.invalidate(errorMessage: "OS Not Supported")
             }
         }
     }
@@ -188,14 +240,8 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
 }
 
 extension Data {
-    struct HexEncodingOptions: OptionSet {
-        let rawValue: Int
-        static let upperCase = HexEncodingOptions(rawValue: 1 << 0)
-    }
-
-    func hexEncodedString(options: HexEncodingOptions = []) -> String {
-        let format = options.contains(.upperCase) ? "%02hhX" : "%02hhx"
-        return self.map { String(format: format, $0) }.joined()
+    func hexString() -> String {
+        return self.map { String(format: "%02hhx", $0) }.joined()
     }
 
     var bytes: [UInt8] {
