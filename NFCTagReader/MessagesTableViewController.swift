@@ -9,19 +9,21 @@ import UIKit
 import CoreNFC
 
 /// - Tag: MessagesTableViewController
-class MessagesTableViewController: UITableViewController, NFCNDEFReaderSessionDelegate {
+class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDelegate {
+
+
 
     // MARK: - Properties
 
     let reuseIdentifier = "reuseIdentifier"
     var detectedMessages = [NFCNDEFMessage]()
-    var session: NFCNDEFReaderSession?
+    var session: NFCTagReaderSession?
 
     // MARK: - Actions
 
     /// - Tag: beginScanning
     @IBAction func beginScanning(_ sender: Any) {
-        guard NFCNDEFReaderSession.readingAvailable else {
+        guard NFCTagReaderSession.readingAvailable else {
             let alertController = UIAlertController(
                 title: "Scanning Not Supported",
                 message: "This device doesn't support tag scanning.",
@@ -32,7 +34,7 @@ class MessagesTableViewController: UITableViewController, NFCNDEFReaderSessionDe
             return
         }
 
-        session = NFCNDEFReaderSession(delegate: self, queue: nil, invalidateAfterFirstRead: false)
+        session = NFCTagReaderSession(pollingOption: .iso14443, delegate: self)
         session?.alertMessage = "Hold your iPhone near the item to learn more about it."
         session?.begin()
     }
@@ -40,7 +42,7 @@ class MessagesTableViewController: UITableViewController, NFCNDEFReaderSessionDe
     // MARK: - NFCNDEFReaderSessionDelegate
 
     /// - Tag: processingTagData
-    func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
+    func readerSession(_ session: NFCTagReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
         DispatchQueue.main.async {
             // Process detected NFCNDEFMessage objects.
             self.detectedMessages.append(contentsOf: messages)
@@ -49,94 +51,154 @@ class MessagesTableViewController: UITableViewController, NFCNDEFReaderSessionDe
     }
 
     /// - Tag: processingNDEFTag
-    func readerSession(_ session: NFCNDEFReaderSession, didDetect tags: [NFCNDEFTag]) {
-        if tags.count > 1 {
-            // Restart polling in 500ms
-            let retryInterval = DispatchTimeInterval.milliseconds(500)
-            session.alertMessage = "More than 1 tag is detected, please remove all tags and try again."
-            DispatchQueue.global().asyncAfter(deadline: .now() + retryInterval, execute: {
+
+    func tagReaderSessionDidBecomeActive(_ session: NFCTagReaderSession) {
+    }
+
+    func tagReaderSession(_ session: NFCTagReaderSession, didInvalidateWithError error: Error) {
+    }
+
+    func generateRandomBytes() -> Data? {
+        var keyData = Data(count: 8)
+        let result = keyData.withUnsafeMutableBytes {
+            SecRandomCopyBytes(kSecRandomDefault, 8, $0.baseAddress!)
+        }
+
+        if result == errSecSuccess {
+            return keyData
+        } else {
+            return nil
+        }
+    }
+
+    func tagReaderSession(_ session: NFCTagReaderSession, didDetect tags: [NFCTag]) {
+        guard !tags.isEmpty, let tag = tags.first else {
+            session.alertMessage = "Tag not found!"
+            DispatchQueue.global().asyncAfter(deadline: .now()) {
                 session.restartPolling()
-            })
+            }
             return
         }
-        
-        // Connect to the found tag and perform NDEF message reading
-        let tag = tags.first!
-        session.connect(to: tag, completionHandler: { (error: Error?) in
-            if nil != error {
-                session.alertMessage = "Unable to connect to tag."
-                session.invalidate()
+
+        session.connect(to: tag) { error in
+            if let error = error {
+                print("Unable to connect to tag: \(error.localizedDescription)")
+                session.invalidate(errorMessage: "Unable to connect to tag: \(error.localizedDescription)")
                 return
             }
-            
-            tag.queryNDEFStatus(completionHandler: { (ndefStatus: NFCNDEFStatus, capacity: Int, error: Error?) in
-                if .notSupported == ndefStatus {
-                    session.alertMessage = "Tag is not NDEF compliant"
-                    session.invalidate()
-                    return
-                } else if nil != error {
-                    session.alertMessage = "Unable to query NDEF status of tag"
-                    session.invalidate()
-                    return
-                }
-                
-                tag.readNDEF(completionHandler: { (message: NFCNDEFMessage?, error: Error?) in
-                    var statusMessage: String
-                    if nil != error || nil == message {
-                        statusMessage = "Fail to read NDEF from tag"
-                    } else {
-                        statusMessage = "Found 1 NDEF message"
-                        DispatchQueue.main.async {
-                            // Process detected NFCNDEFMessage objects.
-                            self.detectedMessages.append(message!)
-                            self.tableView.reloadData()
-                        }
+
+            if case .iso7816(let nfcTag) = tag {
+                if #available(iOS 14.0, *) {
+
+                    //Get Challenge
+                    //Data Response: 8 bytes random number
+                    //SW1/SW2: 90/00
+//                    let getChallenge = NFCISO7816APDU(data: Data([
+//                        0x00,
+//                        0x84,
+//                        0x00,
+//                        0x00,
+//                        0x08,
+//                    ]))
+
+                    guard /*let getChallengeApdu = getChallenge, */let trn = self.generateRandomBytes() else {
+                        session.invalidate(errorMessage: "Unable to connect to tag")
+                        return
                     }
-                    
-                    session.alertMessage = statusMessage
-                    session.invalidate()
-                })
-            })
-        })
-    }
-    
-    /// - Tag: sessionBecomeActive
-    func readerSessionDidBecomeActive(_ session: NFCNDEFReaderSession) {
-        
-    }
-    
-    /// - Tag: endScanning
-    func readerSession(_ session: NFCNDEFReaderSession, didInvalidateWithError error: Error) {
-        // Check the invalidation reason from the returned error.
-        if let readerError = error as? NFCReaderError {
-            // Show an alert when the invalidation reason is not because of a
-            // successful read during a single-tag read session, or because the
-            // user canceled a multiple-tag read session from the UI or
-            // programmatically using the invalidate method call.
-            if (readerError.code != .readerSessionInvalidationErrorFirstNDEFTagRead)
-                && (readerError.code != .readerSessionInvalidationErrorUserCanceled) {
-                let alertController = UIAlertController(
-                    title: "Session Invalidated",
-                    message: error.localizedDescription,
-                    preferredStyle: .alert
-                )
-                alertController.addAction(UIAlertAction(title: "OK", style: .default, handler: nil))
-                DispatchQueue.main.async {
-                    self.present(alertController, animated: true, completion: nil)
+//                    nfcTag.sendCommand(apdu: getChallengeApdu) { data, sw1, sw2, error in
+//                        if error != nil {
+//                            session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
+//                            return
+//                        }
+//                        debugPrint("Data from nfcTag: \(data), sw1/sw2: \(sw1)/\(sw2)")
+//                        session.invalidate()
+//                    }
+
+
+                    let secureRead = NFCISO7816APDU.init(data: Data([
+                        0x90,
+                        0x32,
+                        0x03,
+                        0x00,
+                        0x0A, 0x12, 0x01,
+                                    trn[0],
+                                    trn[1],
+                                    trn[2],
+                                    trn[3],
+                                    trn[4],
+                                    trn[5],
+                                    trn[6],
+                                    trn[7], 0x00]))
+
+                    guard let secureApdu = secureRead else {
+                        session.invalidate(errorMessage: "Unable to connect to tag")
+                        return
+                    }
+
+                    nfcTag.sendCommand(apdu: secureApdu) { data, sw1, sw2, error in
+                        if error != nil {
+                            session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
+                            return
+                        }
+
+                        let dataKartuHexString = self.hexStrToByte(in: data.hexEncodedString())
+                        let purseBalance = self.byteToHextString(in: dataKartuHexString, start: 3, end: 5).joined()
+                        let saldo = UInt32(purseBalance, radix: 16) ?? 0
+
+                        debugPrint("Saldo: \(saldo)")
+                        debugPrint("Data from nfcTag: \(data), sw1/sw2: \(sw1)/\(sw2)")
+                        session.invalidate()
+                    }
+
+                } else {
+                    // Fallback on earlier versions
+                    session.invalidate(errorMessage: "OS Not Supported")
                 }
+
             }
         }
-
-        // To read new tags, a new session instance is required.
-        self.session = nil
     }
 
-    // MARK: - addMessage(fromUserActivity:)
+    func byteToHextString(in strings: [String], start: Int, end: Int) -> ArraySlice<String> {
+        let range = (start - 1)..<end
+        let output = strings[range]
+        return output
+    }
 
-    func addMessage(fromUserActivity message: NFCNDEFMessage) {
-        DispatchQueue.main.async {
-            self.detectedMessages.append(message)
-            self.tableView.reloadData()
+    func hexStrToByte(in string: String) -> [String] {
+        var hexStr = string
+        if hexStr.lengthOfBytes(using: .utf8) % 2 > 0 {
+            hexStr = "0" + hexStr
         }
+
+        let byteLength = hexStr.lengthOfBytes(using: .utf8) / 2
+        var buffer: [String] = []
+
+        for i in 0...(byteLength - 1) {
+            let start = hexStr.index(hexStr.startIndex, offsetBy: i * 2)
+            let end = hexStr.index(hexStr.startIndex, offsetBy: i * 2 + 2)
+            let range = start..<end
+
+            let hexByte = hexStr[range]
+            buffer.append(String(hexByte))
+        }
+
+        return buffer
+    }
+}
+
+extension Data {
+    struct HexEncodingOptions: OptionSet {
+        let rawValue: Int
+        static let upperCase = HexEncodingOptions(rawValue: 1 << 0)
+    }
+
+    func hexEncodedString(options: HexEncodingOptions = []) -> String {
+        let format = options.contains(.upperCase) ? "%02hhX" : "%02hhx"
+        return self.map { String(format: format, $0) }.joined()
+    }
+
+    var bytes: [UInt8] {
+        return [UInt8](self)
     }
 }
