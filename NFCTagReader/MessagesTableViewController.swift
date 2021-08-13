@@ -94,8 +94,11 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
     }
 
     func secureRead(session: NFCTagReaderSession, tag: NFCISO7816Tag, completion: @escaping ((_ secureReadPurse: [UInt8]) -> Void)) {
+        let card = self.cardRandom
+        let reader = self.readerRandom
+
         var secureReadPurse: [UInt8] = self.secureRead
-        secureReadPurse.append(contentsOf: self.readerRandom)
+        secureReadPurse.append(contentsOf: reader)
         secureReadPurse.append(self.secureReadLength)
 
         guard let secureAPDU = NFCISO7816APDU.init(data: Data(secureReadPurse)) else {
@@ -109,51 +112,23 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
                 return
             }
 
-            let balanceHex = data.subdata(in: 3..<5).hexString()
+            let balanceHex = data.subdata(in: 2..<5).hexString()
             let balance = UInt32(balanceHex, radix: 16) ?? 0
 
+            let cardNumberHex = data.subdata(in: 8..<16).hexString()
+            debugPrint("Card Number: \(cardNumberHex)")
+
+            let maxLimitHex = data.subdata(in: 78..<81).hexString()
+            let maxLimit = UInt32(maxLimitHex, radix: 16) ?? 0
+            debugPrint("Max limit: \(maxLimit)")
+
             debugPrint("Saldo: \(balance)")
-            completion(secureReadPurse)
-        }
-    }
-
-    func writeRequest(session: NFCTagReaderSession, tag: NFCISO7816Tag, secureReadPurse: [UInt8]) {
-        var request = secureReadPurse[0..<5]
-        request.append(contentsOf: [0x18, 0x01])
-        request.append(contentsOf: self.readerRandom)
-
-        debugPrint("Write Request: \(request)")
-
-        guard let writeRequestAPDU = NFCISO7816APDU(data: Data(request)) else {
-            session.invalidate(errorMessage: "Unable to connect to tag")
-            return
-        }
-
-        tag.sendCommand(apdu: writeRequestAPDU) { data, sw1, sw2, error in
-            guard error == nil, sw1 == 144, sw2 == 0 else {
-                session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
-                return
-            }
-
-            let cardNumber = data.subdata(in: 8..<16)
-            debugPrint("Card number: \(cardNumber.hexString())")
-
-            let cardBalance = data.subdata(in: 2..<5)
-            let balance = UInt32(cardBalance.hexString(), radix: 16) ?? 0
-            debugPrint("Card balance: \(balance)")
-
-            let maxBalanceLimit = data.subdata(in: 78..<81)
-            let maxBalance = UInt32(maxBalanceLimit.hexString(), radix: 16) ?? 0
-            debugPrint("Max Balance Limit: \(maxBalance)")
-
-            let random = self.readerRandom
-            let card = self.cardRandom
 
             let cardData: [UInt8] = [
                 0x00, 0x00,
                 data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
                 data[16], data[17], data[18], data[19], data[20], data[21], data[22], data[23],
-                random[0], random[1], random[2], random[3], random[4], random[5], random[6], random[7],
+                reader[0], reader[1], reader[2], reader[3], reader[4], reader[5], reader[6], reader[7],
                 card[0], card[1], card[2], card[3], card[4], card[5], card[6], card[7],
                 0x00, 0x00, 0x00, 0x00,
                 data[1],
@@ -168,10 +143,11 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
                 data[95], data[96], data[97], data[98], data[99], data[100], data[101], data[102],
                 data[103], data[104], data[105], data[106], data[107], data[108], data[109], data[110]
             ]
+            debugPrint("Card Data: \(Data(cardData).hexString())")
 
-            debugPrint(cardData)
+            session.invalidate()
+            completion(secureReadPurse)
         }
-
     }
 
     func tagReaderSession(_ session: NFCTagReaderSession, didDetect tags: [NFCTag]) {
@@ -199,8 +175,8 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
                 self.readerRandom = [UInt8](random)
 
                 self.challenge(session: session, tag: nfcTag) {
-                    self.secureRead(session: session, tag: nfcTag) {
-                        self.writeRequest(session: session, tag: nfcTag, secureReadPurse: $0)
+                    self.secureRead(session: session, tag: nfcTag) { _ in
+//                        self.writeRequest(session: session, tag: nfcTag, secureReadPurse: $0)
                     }
                 }
 
