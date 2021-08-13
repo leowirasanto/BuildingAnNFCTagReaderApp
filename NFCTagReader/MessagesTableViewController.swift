@@ -8,12 +8,23 @@ The view controller that scans and displays NDEF messages.
 import UIKit
 import CoreNFC
 
+struct CardInfo {
+    let cardNumber: String
+    let cardData: Data
+    let balance: UInt32
+    let maxBalanceLimit: UInt32
+}
+
 /// - Tag: MessagesTableViewController
 class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDelegate {
 
     let challenge: [UInt8] = [0x00, 0x84, 0x00, 0x00, 0x08]
+    
     let secureRead: [UInt8] = [0x90, 0x32, 0x03, 0x00, 0x0A, 0x12, 0x01]
     let secureReadLength: UInt8 = 0x00
+    
+    let creditCommand: [UInt8] = [0x90, 0x36, 0x14, 0x01, 0x25, 0x03, 0x14, 0x02, 0x14, 0x03]
+    let creditCommandLength: UInt8 = 0x18
 
     var readerRandom: [UInt8] = []
     var cardRandom: [UInt8] = []
@@ -24,6 +35,11 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
     var detectedMessages = [NFCNDEFMessage]()
     var session: NFCTagReaderSession?
 
+    
+    override func viewDidAppear(_ animated: Bool) {
+        self.beginScanning(self)
+    }
+    
     // MARK: - Actions
 
     /// - Tag: beginScanning
@@ -93,7 +109,7 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
         }
     }
 
-    func secureRead(session: NFCTagReaderSession, tag: NFCISO7816Tag, completion: @escaping ((_ secureReadPurse: [UInt8]) -> Void)) {
+    func secureRead(session: NFCTagReaderSession, tag: NFCISO7816Tag, completion: @escaping ((_ card: CardInfo) -> Void)) {
         let card = self.cardRandom
         let reader = self.readerRandom
 
@@ -115,17 +131,13 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
             let balanceHex = data.subdata(in: 2..<5).hexString()
             let balance = UInt32(balanceHex, radix: 16) ?? 0
 
-            let cardNumberHex = data.subdata(in: 8..<16).hexString()
-            debugPrint("Card Number: \(cardNumberHex)")
+            let cardNumber = data.subdata(in: 8..<16).hexString()
 
             let maxLimitHex = data.subdata(in: 78..<81).hexString()
             let maxLimit = UInt32(maxLimitHex, radix: 16) ?? 0
-            debugPrint("Max limit: \(maxLimit)")
-
-            debugPrint("Saldo: \(balance)")
 
             let cardData: [UInt8] = [
-                0x00, 0x00,
+                0x00, 0x01,
                 data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
                 data[16], data[17], data[18], data[19], data[20], data[21], data[22], data[23],
                 reader[0], reader[1], reader[2], reader[3], reader[4], reader[5], reader[6], reader[7],
@@ -143,10 +155,47 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
                 data[95], data[96], data[97], data[98], data[99], data[100], data[101], data[102],
                 data[103], data[104], data[105], data[106], data[107], data[108], data[109], data[110]
             ]
-            debugPrint("Card Data: \(Data(cardData).hexString())")
-
+            
+            let cardInfo = CardInfo(
+                cardNumber: cardNumber,
+                cardData: Data(cardData),
+                balance: balance,
+                maxBalanceLimit: maxLimit
+            )
+            
             session.invalidate()
-            completion(secureReadPurse)
+            completion(cardInfo)
+        }
+    }
+    
+    func updateCredit(session: NFCTagReaderSession, tag: NFCISO7816Tag, cardData: [UInt8], completion: @escaping (() -> Void)) {
+        let reader = self.readerRandom
+        
+        // Sample cryptogram
+        guard let cryptogramData = "060027102AC4791F00000000000000000AF5A63C2FA31C2FCE9EEDED503B4ED4".data(using: .hexadecimal) else {
+            return
+        }
+        
+        let cryptogram = [UInt8](cryptogramData)
+        
+        var writeCommand = self.creditCommand
+        writeCommand.append(contentsOf: reader)
+        writeCommand.append(contentsOf: cryptogram[16..<32])
+        writeCommand.append(contentsOf: cryptogram[8..<16])
+        writeCommand.append(creditCommandLength)
+        
+        guard let updateAPDU = NFCISO7816APDU.init(data: Data(writeCommand)) else {
+            session.invalidate(errorMessage: "Unable to update balance")
+            return
+        }
+        
+        tag.sendCommand(apdu: updateAPDU) { data, sw1, sw2, error in
+            guard error == nil, sw1 == 144, sw2 == 0 else {
+                session.invalidate(errorMessage: "Try again: \(error?.localizedDescription ?? "")")
+                return
+            }
+            
+            debugPrint("Updated: \([UInt8](data))")
         }
     }
 
@@ -175,43 +224,52 @@ class MessagesTableViewController: UITableViewController, NFCTagReaderSessionDel
                 self.readerRandom = [UInt8](random)
 
                 self.challenge(session: session, tag: nfcTag) {
-                    self.secureRead(session: session, tag: nfcTag) { _ in
-//                        self.writeRequest(session: session, tag: nfcTag, secureReadPurse: $0)
+                    self.secureRead(session: session, tag: nfcTag) { card in
+                        debugPrint("Card Number: \(card.cardNumber)")
+                        debugPrint("Balance: \(card.balance)")
+                        debugPrint("Max Balance Limit: \(card.maxBalanceLimit)")
+                        debugPrint("Card Data: \(card.cardData)")
+                        
+                        self.updateCredit(session: session, tag: nfcTag, cardData: [UInt8](card.cardData)) {
+                            
+                        }
                     }
                 }
-
+                
+                
             } else {
                 // Fallback on earlier versions
                 session.invalidate(errorMessage: "OS Not Supported")
             }
         }
     }
+}
 
-    func byteToHextString(in strings: [String], start: Int, end: Int) -> ArraySlice<String> {
-        let range = (start - 1)..<end
-        let output = strings[range]
-        return output
+extension String {
+    enum ExtendedEncoding {
+        case hexadecimal
     }
 
-    func hexStrToByte(in string: String) -> [String] {
-        var hexStr = string
-        if hexStr.lengthOfBytes(using: .utf8) % 2 > 0 {
-            hexStr = "0" + hexStr
+    func data(using encoding: ExtendedEncoding) -> Data? {
+        guard count % 2 == 0 else {
+            return nil
         }
-
-        let byteLength = hexStr.lengthOfBytes(using: .utf8) / 2
-        var buffer: [String] = []
-
-        for i in 0...(byteLength - 1) {
-            let start = hexStr.index(hexStr.startIndex, offsetBy: i * 2)
-            let end = hexStr.index(hexStr.startIndex, offsetBy: i * 2 + 2)
-            let range = start..<end
-
-            let hexByte = hexStr[range]
-            buffer.append(String(hexByte))
+        
+        var data: Data = .init(capacity: count / 2)
+        
+        var evenIndex = true
+        for i in indices {
+            if evenIndex {
+                let byteRange = i...index(after: i)
+                guard let byte = UInt8(self[byteRange], radix: 16) else {
+                    return nil
+                }
+                data.append(byte)
+            }
+            evenIndex.toggle()
         }
-
-        return buffer
+        
+        return data
     }
 }
 
