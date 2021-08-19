@@ -14,6 +14,7 @@
 		B47143DF1ECF6EC10026C5B4 /* MessagesTableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47143DC1ECF6EC10026C5B4 /* MessagesTableViewController.swift */; };
 		B47143E01ECF6EC10026C5B4 /* MessagesTableViewController+DataSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47143DD1ECF6EC10026C5B4 /* MessagesTableViewController+DataSource.swift */; };
 		B47143E11ECF6EC10026C5B4 /* PayloadsTableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47143DE1ECF6EC10026C5B4 /* PayloadsTableViewController.swift */; };
+		E5EBFCEE26CE5C590076C74C /* Scanner2View.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EBFCED26CE5C590076C74C /* Scanner2View.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +31,7 @@
 		B47143DE1ECF6EC10026C5B4 /* PayloadsTableViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PayloadsTableViewController.swift; sourceTree = "<group>"; };
 		D5C3DC30D5C429F000000001 /* SampleCode.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = SampleCode.xcconfig; path = Configuration/SampleCode.xcconfig; sourceTree = "<group>"; };
 		D8089BF0D8089AD000000001 /* LICENSE.txt */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text; path = LICENSE.txt; sourceTree = "<group>"; };
+		E5EBFCED26CE5C590076C74C /* Scanner2View.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scanner2View.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +67,7 @@
 		B41052221EC2BA04006D9146 /* NFCTagReader */ = {
 			isa = PBXGroup;
 			children = (
+				E5EBFCEC26CE5C440076C74C /* Scanner2 */,
 				B41052231EC2BA04006D9146 /* AppDelegate.swift */,
 				B47143DC1ECF6EC10026C5B4 /* MessagesTableViewController.swift */,
 				B47143DD1ECF6EC10026C5B4 /* MessagesTableViewController+DataSource.swift */,
@@ -100,6 +103,14 @@
 				D8089BF0D8089AD000000001 /* LICENSE.txt */,
 			);
 			path = LICENSE;
+			sourceTree = "<group>";
+		};
+		E5EBFCEC26CE5C440076C74C /* Scanner2 */ = {
+			isa = PBXGroup;
+			children = (
+				E5EBFCED26CE5C590076C74C /* Scanner2View.swift */,
+			);
+			path = Scanner2;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -184,6 +195,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B47143E11ECF6EC10026C5B4 /* PayloadsTableViewController.swift in Sources */,
+				E5EBFCEE26CE5C590076C74C /* Scanner2View.swift in Sources */,
 				B47143E01ECF6EC10026C5B4 /* MessagesTableViewController+DataSource.swift in Sources */,
 				B47143DF1ECF6EC10026C5B4 /* MessagesTableViewController.swift in Sources */,
 				B41052241EC2BA04006D9146 /* AppDelegate.swift in Sources */,
